@@ -1,0 +1,18 @@
+{
+  "Plugins": [
+    {
+      "Name": "HealthBars",
+      "OriginalAuthor": "danthespal",
+      "Description": "Floating monster and player health bars overlay.",
+      "EndorsedAuthor": "danthespal",
+      "Repositories": [
+        {
+          "Author": "danthespal",
+          "Name": "OriathHub-HealthBars",
+          "Branch": null,
+          "Location": null
+        }
+      ]
+    }
+  ]
+}
