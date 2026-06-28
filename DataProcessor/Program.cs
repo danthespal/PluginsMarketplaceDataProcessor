@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using Octokit;
 using OriathHub.Catalog.DataProcessor;
@@ -55,13 +56,16 @@ if (!string.IsNullOrWhiteSpace(token))
     github.Credentials = new Credentials(token);
 }
 
+using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+http.DefaultRequestHeaders.UserAgent.ParseAdd("OriathHub-Catalog-DataProcessor");
+
 var plugins = new List<ProcessedPlugin>();
 foreach (var plugin in input.Plugins)
 {
     var forks = new List<ProcessedFork>();
     foreach (var repository in plugin.Repositories)
     {
-        var fork = await ProcessFork(github, repository);
+        var fork = await ProcessFork(github, http, repository);
         if (fork != null)
         {
             forks.Add(fork);
@@ -77,7 +81,7 @@ var writeOptions = new JsonSerializerOptions { WriteIndented = true };
 Console.Out.Write(JsonSerializer.Serialize(output, writeOptions));
 return 0;
 
-static async Task<ProcessedFork?> ProcessFork(GitHubClient github, RepositoryInfo repository)
+static async Task<ProcessedFork?> ProcessFork(GitHubClient github, HttpClient http, RepositoryInfo repository)
 {
     var owner = string.IsNullOrWhiteSpace(repository.Location) ? repository.Author : repository.Location;
 
@@ -88,15 +92,17 @@ static async Task<ProcessedFork?> ProcessFork(GitHubClient github, RepositoryInf
             var repo = await github.Repository.Get(owner, repository.Name);
 
             var releases = await github.Repository.Release.GetAll(repo.Id, new ApiOptions { PageCount = 1, PageSize = 10 });
-            var releaseInfos = releases
-                .Where(r => r.PublishedAt != null)
-                .Select(r => new ReleaseInfo(
+            var releaseInfos = new List<ReleaseInfo>();
+            foreach (var r in releases.Where(r => r.PublishedAt != null))
+            {
+                releaseInfos.Add(new ReleaseInfo(
                     r.TagName ?? string.Empty,
                     string.IsNullOrWhiteSpace(r.Name) ? (r.TagName ?? string.Empty) : r.Name,
                     r.Assets.Select(a => a.Name).ToList(),
                     r.Body ?? string.Empty,
-                    r.CreatedAt.UtcDateTime))
-                .ToList();
+                    r.CreatedAt.UtcDateTime,
+                    await ComputeReleaseZipSha256(http, r)));
+            }
 
             var branchName = string.IsNullOrWhiteSpace(repository.Branch) ? repo.DefaultBranch : repository.Branch;
             var branch = await github.Repository.Branch.Get(repo.Id, branchName);
@@ -125,4 +131,28 @@ static async Task<ProcessedFork?> ProcessFork(GitHubClient github, RepositoryInf
     }
 
     return null;
+}
+
+// Downloads a release's first .zip asset and returns its hex SHA-256, so the marketplace can pin and
+// verify the exact artifact it installs. Empty when the release has no .zip asset or the download fails
+// (a missing pin is a soft skip on the client, not an install blocker).
+static async Task<string> ComputeReleaseZipSha256(HttpClient http, Release release)
+{
+    var asset = release.Assets.FirstOrDefault(a =>
+        a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+    if (asset == null || string.IsNullOrWhiteSpace(asset.BrowserDownloadUrl))
+    {
+        return string.Empty;
+    }
+
+    try
+    {
+        var bytes = await http.GetByteArrayAsync(asset.BrowserDownloadUrl);
+        return Convert.ToHexString(SHA256.HashData(bytes));
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"  Could not hash release asset {asset.Name}: {ex.Message}");
+        return string.Empty;
+    }
 }

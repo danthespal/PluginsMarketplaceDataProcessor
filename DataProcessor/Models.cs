@@ -56,5 +56,8 @@ namespace OriathHub.Catalog.DataProcessor
         string Title,
         List<string> FilesAttached,
         string Description,
-        DateTime Date);
+        DateTime Date,
+        // Hex SHA-256 of the release's downloadable .zip asset, pinned so the marketplace can verify
+        // the artifact it downloads before installing. Empty when the release has no .zip asset.
+        string Sha256);
 }
